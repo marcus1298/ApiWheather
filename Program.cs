@@ -3,76 +3,86 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
+using System.Xml;
 
-namespace ClimaELeituraDeCidades
+namespace YahooWeatherExample
 {
     class Program
     {
         static async Task Main(string[] args)
         {
-            // Cria as tarefas
-            var task1 = Task.Run(() => GetWeatherAsync("Rio de Janeiro"));
-            var task2 = Task.Run(() => ReadCityListAsync("cidades.txt"));
+            string city = "New York";
+            string weatherApiUrl = $"https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20weather.forecast%20where%20woeid%20in%20(select%20woeid%20from%20geo.places(1)%20where%20text%3D%22{city}%22)&format=xml&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
 
-            // Aguarda o término de ambas as tarefas
-            await Task.WhenAll(task1, task2);
+            var weatherTask = WeatherService.GetWeatherAsync(weatherApiUrl);
 
-            // Exibe as informações
-            Console.WriteLine($"Tempo em {task1.Result.City}: {task1.Result.Weather}");
-            Console.WriteLine("Cidades:");
-            foreach (var city in task2.Result)
+            string citiesFile = Path.Combine(Directory.GetCurrentDirectory(), "cities.txt");
+            var citiesTask = CityListReader.ReadCityListAsync(citiesFile);
+
+            await Task.WhenAll(weatherTask, citiesTask);
+
+            var weatherInfo = weatherTask.Result;
+            var cities = citiesTask.Result;
+
+            Console.WriteLine("Current weather in " + city + ": " + weatherInfo.Description + ", " + weatherInfo.Temperature + "°F");
+            Console.WriteLine("List of cities: ");
+            foreach (var c in cities)
             {
-                Console.WriteLine(city);
+                Console.WriteLine(c);
             }
 
-            Console.ReadKey();
+            Console.ReadLine();
         }
+    }
 
-        static async Task<WeatherInfo> GetWeatherAsync(string city)
+    public class WeatherService
+    {
+        public static async Task<WeatherInfo> GetWeatherAsync(string apiUrl)
         {
             using (var client = new HttpClient())
             {
-                var response = await client.GetAsync($"http://api.openweathermap.org/data/2.5/weather?q={city}&appid=YOUR_API_KEY");
-                var content = await response.Content.ReadAsStringAsync();
+                var response = await client.GetAsync(apiUrl);
+                var xml = await response.Content.ReadAsStringAsync();
+                var doc = new XmlDocument();
+                doc.LoadXml(xml);
 
-                // Trata a resposta da API e retorna as informações do tempo
-                return new WeatherInfo
-                {
-                    City = city,
-                    Weather = ParseWeather(content)
-                };
+                var temp = doc.SelectSingleNode("//yweather:condition", GetNamespaceManager()).Attributes["temp"].Value;
+                var description = doc.SelectSingleNode("//yweather:condition", GetNamespaceManager()).Attributes["text"].Value;
+
+                return new WeatherInfo { Temperature = temp, Description = description };
             }
         }
 
-        static async Task<List<string>> ReadCityListAsync(string fileName)
+        private static XmlNamespaceManager GetNamespaceManager()
+        {
+            var nsManager = new XmlNamespaceManager(new NameTable());
+            nsManager.AddNamespace("yweather", "http://xml.weather.yahoo.com/ns/rss/1.0");
+            return nsManager;
+        }
+    }
+
+    public class CityListReader
+    {
+        public static async Task<List<string>> ReadCityListAsync(string fileName)
         {
             var cities = new List<string>();
+
             using (var reader = new StreamReader(fileName))
             {
-                string line;
-                while ((line = await reader.ReadLineAsync()) != null)
+                while (!reader.EndOfStream)
                 {
+                    var line = await reader.ReadLineAsync();
                     cities.Add(line);
                 }
             }
 
             return cities;
         }
-
-        static string ParseWeather(string content)
-        {
-            // Faz o parsing do JSON retornado pela API para obter as informações sobre o tempo
-            // Neste exemplo, retorna somente a descrição do tempo
-            // Você pode alterar esta implementação para obter outras informações como temperatura, umidade, etc.
-            return content.Contains("\"weather\":") ?
-                content.Substring(content.IndexOf("\"description\":") + 15, content.IndexOf(",\"icon\"") - content.IndexOf("\"description\":") - 15) :
-                "N/A";
-        }
     }
 
-    class WeatherInfo
+    public class WeatherInfo
     {
-        public string City { get; set; }
-        public string Weather { get; set; }
+        public string Temperature { get; set; }
+        public string Description { get; set; }
     }
 }
